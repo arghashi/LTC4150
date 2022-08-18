@@ -1,63 +1,64 @@
 #include "battery.h"
 
 
-//¸ü¸ÄÒÔÏÂÁ½ÌõÏßÂ·ÒÔÆ¥ÅäÄúµÄµç³Ø
-//ÒÔ¼°ËüµÄ³õÊ¼µçºÉ×´Ì¬
-volatile double battery_mAh = 2000.00; // µç³ØµÄ×ÜºÁ°²¡ª¡ª¡ª¡ª>ĞèÒª¸ù¾İÊµ¼ÊÇé¿öµ÷Õû
-volatile double battery_percent = 100.00;  // ³äµç×´Ì¬£¨°Ù·Ö±È£©£¨µ¥Î»£º%£©¡ª¡ª¡ª¡ª>ĞèÒª¸ù¾İÊµ¼ÊÇéµ÷Õû
+//Change the following two lines to match your battery
+//and its initial charge state
 
-//È«¾Ö±äÁ¿£¨¡°volatile¡±±íÊ¾ÖĞ¶Ï¿ÉÒÔÔÚÄ»ºó¸ü¸ÄËüÃÇ£©£º
-volatile int isrflag;		//Ö»ÄÜÊÇ1»òÕß0£¬ÓÃÀ´ÅĞ¶ÏÖĞ¶Ïº¯ÊıÊÇ·ñ´¥·¢
+volatile double battery_mAh = 2000.00; //The total mA of the battery ------> need to be adjusted according to the actual situation
+volatile double battery_percent = 100.00;  //Charge status (percentage) (unit: %) ------> need to be adjusted according to the actual situation
+
+//global variableï¼ˆâ€œvolatileâ€ Indicates that interrupts can change them behind the scenes)ï¼š
+volatile int isrflag;		//Can only be 1 or 0, used to determine whether the interrupt function is triggered
 volatile long int time, lasttime;
 volatile double mA;
-double ah_quanta = 0.17067759; // Ã¿INT ºÁ°²Ê±
-double percent_quanta; //ÓëÏÂ·½¼ÆËã£¬±íÊ¾Ã¿INT¼õÉÙ»òÔö¼ÓµÄpercent
+double ah_quanta = 0.17067759; //milliamp hours per INT
+double percent_quanta; //Calculated with the following, it means the percent decrease or increase per INT
 
 /*******************************************************************************
-*º¯ÊıµÄÔ­ĞÍ£ºvoid battery_init(void)
-*º¯ÊıµÄ¹¦ÄÜ£ºLTC4150³õÊ¼»¯Òı½Å£¬Ë³±ã¼ÆËãpersent_quanta
-*º¯ÊıµÄ²ÎÊı£ºNone
-*º¯Êı·µ»ØÖµ£ºNone
-*º¯ÊıµÄËµÃ÷£º
-*º¯Êı±àĞ´Õß: ºÀÖí
-*º¯Êı±àĞ´ÈÕÆÚ£º2021/7/21
-*º¯ÊıµÄ°æ±¾ºÅ£ºV1.0
+*function prototypeï¼švoid battery_init(void)
+*function of functionï¼šThe LTC4150 initializes the pins and calculates persistent_quanta by the way
+*Arguments of the function: None
+*Function return value: None
+*Description of the function:
+*Function Writer: Porcupine
+*Function writing date: 2021/7/21
+*The version number of the function: V1.0
 ********************************************************************************/
 
-void battery_init(void)  //³õÊ¼»¯Òı½Å
+void battery_init(void)  //initialization pin
 {
 	GPIO_InitTypeDef GPIO_InitStructure;
     RCC_APB2PeriphClockCmd(	RCC_APB2Periph_GPIOB, ENABLE );
 
-    GPIO_InitStructure.GPIO_Pin = SHDN_Pin;//SHDNÒı½Å
-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP ;   //ÍÆÍìÊä³ö
+    GPIO_InitStructure.GPIO_Pin = SHDN_Pin;//SHDN pin
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP ;   //Push-pull output
     GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
     GPIO_Init(GPIOB, &GPIO_InitStructure);
 	
-	GPIO_InitStructure.GPIO_Pin = INT_Pin;//INTÒı½Å
-	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;   //ÉÏÀ­ÊäÈë
+	GPIO_InitStructure.GPIO_Pin = INT_Pin;//INT pin
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;   //pull-up input
 	GPIO_Init(GPIOB,&GPIO_InitStructure); 	
 	
-	GPIO_InitStructure.GPIO_Pin = POL_Pin;//POLÒı½Å
-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU ;   //ÉÏÀ­ÊäÈë
+	GPIO_InitStructure.GPIO_Pin = POL_Pin;//POL pin
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU ;   //pull-up input
     GPIO_Init(GPIOB, &GPIO_InitStructure);
 	
 	percent_quanta = 1.0 / (battery_mAh / 1000.0 * 5859.0 / 100.0);
 	isrflag =0;
 	
-	SHDN = 1;  //À­¸ßSHDN½ÅµçÆ½£¬LTC4150Ä¬ÈÏÎª¹¤×÷×´Ì¬
+	SHDN = 1;  //Pull up SHDN pin level, LTC4150 defaults to working state
 }
 
 
 /*******************************************************************************
-*º¯ÊıµÄÔ­ĞÍ£ºint battery_stop(void)
-*º¯ÊıµÄ¹¦ÄÜ£ºÊ¹LTC4150´¦Óë¹Ø¶Ï×´Ì¬
-*º¯ÊıµÄ²ÎÊı£ºNone
-*º¯Êı·µ»ØÖµ£ºNone
-*º¯ÊıµÄËµÃ÷£º
-*º¯Êı±àĞ´Õß: ºÀÖí
-*º¯Êı±àĞ´ÈÕÆÚ£º2021/7/21
-*º¯ÊıµÄ°æ±¾ºÅ£ºV1.0
+*å‡½æ•°çš„åŸå‹ï¼šint battery_stop(void)
+*å‡½æ•°çš„åŠŸèƒ½ï¼šä½¿LTC4150å¤„ä¸å…³æ–­çŠ¶æ€
+*å‡½æ•°çš„å‚æ•°ï¼šNone
+*å‡½æ•°è¿”å›å€¼ï¼šNone
+*å‡½æ•°çš„è¯´æ˜ï¼š
+*å‡½æ•°ç¼–å†™è€…: è±ªçŒª
+*å‡½æ•°ç¼–å†™æ—¥æœŸï¼š2021/7/21
+*å‡½æ•°çš„ç‰ˆæœ¬å·ï¼šV1.0
 ********************************************************************************/
 void battery_stop(void)
 {
@@ -66,14 +67,14 @@ void battery_stop(void)
 
 
 /*******************************************************************************
-*º¯ÊıµÄÔ­ĞÍ£ºint battery_res(void)
-*º¯ÊıµÄ¹¦ÄÜ£ºÊ¹LTC4150ÖØÖÃ
-*º¯ÊıµÄ²ÎÊı£ºNone
-*º¯Êı·µ»ØÖµ£ºNone
-*º¯ÊıµÄËµÃ÷£º
-*º¯Êı±àĞ´Õß: ºÀÖí
-*º¯Êı±àĞ´ÈÕÆÚ£º2021/7/21
-*º¯ÊıµÄ°æ±¾ºÅ£ºV1.0
+*Prototype of the function: int battery_res(void)
+* The function of the function: make the LTC4150 reset
+* Arguments of the function: None
+*Function return value: None
+*Description of the function:
+*Function Writer: Porcupine
+*Function writing date: 2021/7/21
+*The version number of the function: V1.0
 ********************************************************************************/
 void battery_res(void)
 {
@@ -83,47 +84,47 @@ void battery_res(void)
 }
 
 /*******************************************************************************
-*º¯ÊıµÄÔ­ĞÍ£ºvoid myISR(void)
-*º¯ÊıµÄ¹¦ÄÜ£ºÓÃÓÚ±»ÖĞ¶Ï´¥·¢
-*º¯ÊıµÄ²ÎÊı£ºNone
-*º¯Êı·µ»ØÖµ£ºNone
-*º¯ÊıµÄËµÃ÷£º
-*º¯Êı±àĞ´Õß: ºÀÖí
-*º¯Êı±àĞ´ÈÕÆÚ£º2021/7/21
-*º¯ÊıµÄ°æ±¾ºÅ£ºV1.0
+*Prototype of the function: void myISR(void)
+*The function of the function: used to be triggered by an interrupt
+* Arguments of the function: None
+*Function return value: None
+*Description of the function:
+*Function Writer: Porcupine
+*Function writing date: 2021/7/21
+*The version number of the function: V1.0
 ********************************************************************************/
-void myISR(void)// µ±INTÎªÏÂÑØÊ±£¬±»ÖĞ¶Ï´¥·¢£¬¼ÆËãÊı¾İ£¬
+void myISR(void)// When INT is the falling edge, it is triggered by an interrupt, calculates the data
 {
-	static int polarity;//Ö»ÄÜÊÇ1»òÕß0
+	static int polarity;//can only be 1 or 0
 
-	// È·¶¨×ÔÉÏ´ÎÖĞ¶ÏºóµÄÑÓ³Ù£¨ÓÃÓÚmA¼ÆËã£©
-	// Çë×¢Òâ£¬µÚÒ»´Î²âÁ¿½«ÊÇ²»ÕıÈ·µÄ£¨Ã»ÓĞÒÔÇ°µÄÊ±¼ä£¡£©
+	// Determine the delay since the last interrupt (for mA calculation)
+        // Note that the first measurement will be incorrect (no previous time!)
 	lasttime = time;
 	time = (millis() * 1000);
 
-	// »ñÈ¡¼«ĞÔÖµ£¬ÓÃÓëÅĞ¶ÏµçÁ÷·½Ïò
+	// Get the polarity value and use it to judge the current direction
 	polarity = POL;
 	
-	if (polarity) // POLÊä³öµçÆ½¸ß = ³äµç£¨µçÁ÷·½ÏòIN¡ª>OUT£©
+	if (polarity) // POL output level high = charging (current direction INâ€”>OUT)
 	{
 		battery_mAh += ah_quanta;
 		battery_percent += percent_quanta;
 	}
-	else // POLÊä³öµçÆ½µÍ = ²»³äµç£¨µçÁ÷·½ÏòOUT¡ª>IN£©
+	else // POL output level is low = no charge (current direction OUTâ€”>IN)
 	{
 		battery_mAh -= ah_quanta;
 		battery_percent -= percent_quanta;
 	}
-	//ÒÔÏÂ¼ÆËãµçÁ÷¿ÉÒÔÈ¥³ı
-	//´ÓÑÓÊ±¼ÆËãmA£¨¿ÉÑ¡£©
+	//The following calculation current can be removed
+	//Calculate mA from delay (optional)
 
 	mA = 614.4 / ((time-lasttime) / 1000000.0);
 
-	// Èç¹û³äµç£¬ÎÒÃÇ»á½«mAÉèÎª¸º£¨¿ÉÑ¡£©
+	// If charging, we will make mA negative (optional)
 
 	if (polarity) mA = mA * -1.0;
 
-	// ÉèÖÃisrflagÒÔ±ãÖ÷Ñ­»·ÖªµÀ·¢ÉúÁËÖĞ¶Ï
+	// Set the isrflag so that the main loop knows that an interrupt has occurred
 
 	isrflag = 1;
 }
@@ -131,31 +132,31 @@ void myISR(void)// µ±INTÎªÏÂÑØÊ±£¬±»ÖĞ¶Ï´¥·¢£¬¼ÆËãÊı¾İ£¬
 
 
 /*******************************************************************************
-*º¯ÊıµÄÔ­ĞÍ£ºvoid battery_start(void)
-*º¯ÊıµÄ¹¦ÄÜ£ºÆô¶¯LTC4150µÄ¹¦ÄÜ
-*º¯ÊıµÄ²ÎÊı£ºNone
-*º¯Êı·µ»ØÖµ£ºNone
-*º¯ÊıµÄËµÃ÷£º
-*º¯Êı±àĞ´Õß: ºÀÖí
-*º¯Êı±àĞ´ÈÕÆÚ£º2021/7/21
-*º¯ÊıµÄ°æ±¾ºÅ£ºV1.0
+*The prototype of the function: void battery_start(void)
+*Function of function: Start the function of the LTC4150
+* Arguments of the function: None
+*Function return value: None
+*Description of the function:
+*Function Writer: Porcupine
+*Function writing date: 2021/7/21
+*The version number of the function: V1.0
 ********************************************************************************/
 
 void battery_start(void)
 {
-	// µ±ÎÒÃÇ¼ì²âµ½Ò»¸öINTĞÅºÅÊ±£¬myISR£¨£©º¯Êı½«×Ô¶¯ÔËĞĞ¡£myISR£¨£©½«isrflagÉèÖÃÎª1
-	// ÕâÑùÎÒÃÇ¾ÍÖªµÀ·¢ÉúÁËÊ²Ã´ÊÂ¡£
+	// When we detect an INT signal, the myISR() function will run automatically. myISR() sets isrflag to 1
+	// That way we know what's going on.
 	char data1[8];
 	char data2[6];
 	char data3[6];
 	char data4[7];	
 	
-	if (isrflag)  //ÅĞ¶ÏINT½ÅÊÇ·ñ´¥·¢ÖĞ¶Ï
+	if (isrflag)  //Determine whether the INT pin triggers an interrupt
 	{
-	// ½«±êÖ¾ÖØÖÃÎª 0 £¬ÕâÑùÃ¿¸öINTÖ»Ö´ĞĞÒ»´Î
+	// reset the flag to 0 so that each INT is executed only once
 	isrflag = 0;
 
-	// ´®¿Ú´òÓ¡µ±Ç°×´Ì¬£¨myISR£¨£©¼ÆËãµÄ±äÁ¿£©
+	// The serial port prints the current state (variable calculated by myISR())
 	printf("mAh: ");
 	printf("%f", battery_mAh);
 	printf(" soc: ");
@@ -165,19 +166,19 @@ void battery_start(void)
 	printf("s mA: ");
 	printf("%f\n\n", mA);
 		
-	//OLEDÆÁÄ»ÏÔÊ¾µ±Ç°Êı¾İ
-	sprintf(data1, "%.2f" ,battery_mAh);     //µç³ØÄ¿Ç°µçÁ¿
-	sprintf(data2, "%.2f" ,battery_percent);	//µç³ØÊ£Óà°Ù·Ö±È
-	sprintf(data3, "%.2f" ,((time-lasttime)/1000000.0));	//Ò»INTËùĞèÊ±¼ä
-	sprintf(data4, "%.2f" ,mA);		//µçÁ÷´óĞ¡
+	//OLED screen showing current data
+	sprintf(data1, "%.2f" ,battery_mAh);     //Current battery level
+	sprintf(data2, "%.2f" ,battery_percent);	//Battery percentage remaining
+	sprintf(data3, "%.2f" ,((time-lasttime)/1000000.0));	//Time required for one INT
+	sprintf(data4, "%.2f" ,mA);		//Current size
 	Oled_Display_String(0, 48, data1);
 	Oled_Display_String(2, 48, data2);
 	Oled_Display_String(4, 56, data3);
 	Oled_Display_String(6, 40, data4);
 	}
-	// Äú¿ÉÒÔÔÚÖ÷Ñ­»·£¨£©ÖĞÔËĞĞ×Ô¼ºµÄ´úÂë
-	// myISR£¨£©½«×Ô¶¯¸üĞÂĞÅÏ¢
-	// Èç¹ûĞèÒªµÄ»°£¬ÉèÖÃisrflagÈÃÄãÖªµÀÓĞĞ©ÊÂÇéÒÑ¾­¸Ä±äÁË¡£
+	// You can run your own code in the main loop()
+	// myISR() will automatically update the information
+	// If needed, set isrflag to let you know that something has changed.
 
 }
 
